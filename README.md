@@ -7,3 +7,26 @@ This project aims to design a post-quantum secure classical control plane for qu
 ## Software Used : QuNetSim
 Why QuNetSim?
 QuNetSim is a high-level quantum network simulator designed for developing and testing quantum networking applications and protocols at the network and application layers. It enables rapid prototyping of control and communication protocols without requiring detailed physical-layer modeling. This makes QuNetSim well-suited for this project, which focuses on the design of a post-quantum secure classical control plane and its performance evaluation.
+## How to run QuNetSim in your device?
+1. Follow the instructions on the official website first
+https://tqsd.github.io/QuNetSim/install.html
+
+2. However, QuNetSim has not been updated to use newer versions of matplotlib, scapy and numpy. Make sure to downgrade them before installing QuNetSim
+Recommended versions :
+- matplotlib==3.5.3
+- numpy==1.22.4
+- scipy==1.9.3
+
+Downgrade after installing a virtual environment
+```bash
+pip install matplotlib==3.5.3 numpy==1.22.4 scipy==1.9.3
+```
+3. Install QuNetSim
+```bash
+pip install QuNetSim
+```
+4. Once you log out and log back in, you have to reactivate a virtual environment and reinstall qunetsim
+```bash
+source .venv/bin/activate
+pip install QuNetSim
+```
