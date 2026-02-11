@@ -1,9 +1,30 @@
-# Design and Evaluation of a Post-Quantum Secure Control Plane in Quantum Networks
-A self research project exploring the design and performance evaluation of a post-quantum secure classical control plane for quantum networks
+# Design of a Secure and Deterministic Classical Control Plane for NV-Center Quantum Repeater Nodes
+The control plane coordinates entanglement generation, memory allocation, and local operations across NV-center repeater nodes using classical messaging and event-driven state machines. It  accounts for probabilistic entanglement success and classical communication delays while ensuring authenticated and deterministic execution of local quantum operations.
 ## Problem
-Current quantum network architectures rely on classical cryptographic schemes such as RSA and ECC to secure the classical control channel. These schemes are vulnerable to future large-scale quantum computers, posing a long-term security risk to quantum network control
+Although physical mechanisms of entanglement generation and storage have been widely studied, the classical coordination required to operate these nodes reliably remains underdeveloped and security assumptions are often implicit. Without a well-designed control plane, coherence loss and attacks are possible
 ## Goal
-This project aims to design a post-quantum secure classical control plane for quantum networks by integrating post-quantum cryptography (PQC). The system is evaluated to study performance trade-offs such as latency and communication overhead compared to traditional RSA/ECC based approach
+Design a secure classical control plane that 
+- Coordinates entanglement generation & swapping
+- Preserves coherence of NV nuclear memories
+- Resists message forgery, replay and desynchronization attacks
+- Evaluate trade off between security overhead & quantum performance
+## Methodology
+- Control plane architecture design
+	- Layered control-plane stack
+	- Deterministic scheduling policies
+- NV-center behavior abstraction model
+	- Model probabilistic entanglement attempts
+	- Local operation latencies (swap, measure, correction)
+- Protocol implementation in QuNetSim
+	- Control plane logic
+	- Node level orchestration
+	- Secure classical messaging using PQC
+	- Timeout handling
+- Evaluation
+	- Control-plane latency
+	- Entanglement success probability under scheduling strategies
+	- Coherence-time consumption
+	- Impact of security overhead (authentication, handshake)
 ## Software Used : QuNetSim
 Why QuNetSim?
 QuNetSim is a high-level quantum network simulator designed for developing and testing quantum networking applications and protocols at the network and application layers. It enables rapid prototyping of control and communication protocols without requiring detailed physical-layer modeling. This makes QuNetSim well-suited for this project, which focuses on the design of a post-quantum secure classical control plane and its performance evaluation.
