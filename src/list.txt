@@ -1,0 +1,33 @@
+Timeline
+1. PQC Handshake, make it stable
+    - Add timing measurement
+2. Secure Classical control plane (authentication)
+    - Use the shared key to protect classical control messages
+    - Message authentication (HMAC)
+    - Verify MAC on receive and reject invalid messages
+    - Output : authenticated classical messages
+    - After PQC handshake, all control messages are authenticated
+3. Design Entanglement Establishment Protocol (Protocol Design)
+    - Design message flow
+    - wrap every classical message with HMAC
+    - Sequence diagram
+4. Evaluation : With vs Without PQC
+    - Implement Baseline + with PQC 
+    - Metrics : no. of classical messages, PQC handshake overhead
+    - Table of results
+5. Extend to Multi-Node/Repeater Scenario
+    - Show scalability
+    - Perform chained Entanglement establishment / entanglement swapping
+    - secure multi-hop control plane 
+    - limitations?
+6. Failure & attacks
+    - Simulate attacker
+    - drop messages, modified MAC 
+    - show messages are rejected & protocol aborts safely
+    - Eavesdropping, MITM
+7. Refactoring & architecture cleanup
+    - architecture diagram
+8. Compare with RSA/ECC (if have time)
+9. Report
+Control Plane Design = security + coordination rules
+Protocol Implementation = entanglement logic and behavior

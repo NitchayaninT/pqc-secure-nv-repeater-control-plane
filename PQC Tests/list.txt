@@ -1,0 +1,34 @@
+Step 1 : Try using Kyber library in python
+- Install/use a Kyber library from Python (for research-level prototyping, the common approach is a Python wrapper or liboqs bindings).
+- Write a script that does: keygen → encaps → decaps and prints:
+    - ciphertext length
+    - shared-secret length
+    - time for each step (rough)
+
+If this fails, fix PQC env before mixing with QuNetSim
+
+Step 2: “PQC gate” in the control plane (simple) 
+Does PQC research fit this tool?
+
+The idea :
+- Insert a handshake step before allowing an entanglement request:
+
+Flow :
+- Alice → Bob: “PQC_HELLO”
+- Bob runs Kyber keygen, sends public key to Alice
+- Alice runs encaps(pk), sends ciphertext to Bob
+- Bob runs decaps(ct) → both now have shared secret K
+- Alice sends: “ENT_REQUEST || MAC_K(ENT_REQUEST)” (or just “ENT_REQUEST” for the first test)
+- Bob verifies (optional) and then they proceed to establish EPR.
+
+What you measure (minimum)
+- Total handshake time (Alice+Bob)
+- Number of classical messages and total bytes added
+- Impact on “time to first EPR” (baseline vs PQC-gated)
+
+Why this answers your question
+If you can do this cleanly, you’ve proven QuNetSim can support your PQC-control-plane idea because:
+PQC sits naturally in classical control messages
+You can instrument latency + overhead
+
+The rest is “protocol design”, not simulator limitations
