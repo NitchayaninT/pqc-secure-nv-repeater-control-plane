@@ -7,6 +7,8 @@ import time
 import oqs
 import os
 import random
+import hashlib
+import hmac
 
 kem_name = "ML-KEM-768" # for kyber 768
 
@@ -20,6 +22,7 @@ PQC_DONE = "PQC_DONE"
 
 network = Network.get_instance()
 backend = EQSNBackend()
+results = {} # to keep results of each process' latency
 
 def is_string(content):
     return isinstance(content, str)
@@ -43,39 +46,102 @@ def pqc_keyexchange_rec(host, sender_id):
 
 # PQC Key generation
 def pqc_keygen(host, receiver_id):
+    start = time.perf_counter()
     # This kem_receiver will hold the secret key internally, which will be used in decapsulation
     kem_receiver = oqs.KeyEncapsulation(kem_name)  
     pk = kem_receiver.generate_keypair()
+    # Time taken of key generation process (computational latency)
+    results['keygen_cpu'] = time.perf_counter() - start
+
+    # Bob sends PK to Alice
+    alice_received_pk_start = time.perf_counter()
     print(host.host_id, PQC_SEND_PK, " -> ", receiver_id)
     host.send_classical(receiver_id, pk.hex(), await_ack=True) # in qunetsim, they can only carry string msgs
+    # time taken of Pk transmission
+    results['pk_transmission'] = time.perf_counter() - alice_received_pk_start
+    print("PQC_SEND_PK_ACK received")
     return kem_receiver
 
+# PQC encapsulation
 def pqc_encaps(host, receiver_id):
-    pk = host.get_classical(receiver_id)
-    if pk is None:
-        raise RuntimeError(host.host_id+" did not receive PK")
-    for m in pk:
-        m = bytes.fromhex(m.content) # because we sent hex string
-        with oqs.KeyEncapsulation(kem_name) as kem:
-            ct, ss_enc = kem.encap_secret(m) # only accept a byte type object
-            print(host.host_id, PQC_SEND_CT, " -> ", receiver_id)
-            host.send_classical(receiver_id,ct.hex(), await_ack=True) # sends ciphertext
-            # print("PQC_CT_ACK received")
-            break
+    pk_msg = host.get_classical(receiver_id, wait=5)[0].content
+    pk_bytes = bytes.fromhex(pk_msg) # because we sent hex string
+    print("Byte count = ",len(pk_bytes))
+
+    start = time.perf_counter() # start encaps
+    with oqs.KeyEncapsulation(kem_name) as kem:
+        ct, ss_enc = kem.encap_secret(pk_bytes) # only accept a byte type object
+        
+        # calculate encaps computation time
+        results['encap_cpu'] = time.perf_counter() - start
+
+        # sends ct back to bob
+        print(host.host_id, PQC_SEND_CT, " -> ", receiver_id)
+        bob_received_ct_start = time.perf_counter()
+        host.send_classical(receiver_id,ct.hex(), await_ack=True) # sends ciphertext
+        results['ct_transmission'] = time.perf_counter() - bob_received_ct_start
+        print("PQC_CT_ACK received")
     return ss_enc # alice gets their shared secret from bob's pk
 
+# PQC decapsulation 
 def pqc_decaps(host, receiver_id, kem_host):
-    ct = host.get_classical(receiver_id)
-    if ct is None:
-        raise RuntimeError(host.host_id+" did not receive Ciphertext")
-    for m in ct:
-        m = bytes.fromhex(m.content)
-        with oqs.KeyEncapsulation(kem_name) as kem:
-             # uses bob's internal private key to decap the received ciphertext
-            ss_dec = kem_host.decap_secret(m)
-            print(PQC_DONE)
-            break
+    ct_msg = host.get_classical(receiver_id, wait=5)[0].content
+    ct_bytes = bytes.fromhex(ct_msg)
+    print("Byte count = ",len(ct_bytes))
+
+    start = time.perf_counter()
+     
+    with oqs.KeyEncapsulation(kem_name) as kem:
+        # uses bob's internal private key to decap the received ciphertext
+        ss_dec = kem_host.decap_secret(ct_bytes)
+
+        # calculates decap computation time
+        results['decap_cpu'] = time.perf_counter() - start
+        print(PQC_DONE)
+        
     return ss_dec
+
+# mac is used to verify data integrity and authenticity of a message
+# by combining a secret key with a cryptographic hash function (SHA-256)
+# kyber ensures no one can read the message
+# hmac ensures no one has changed it or faked it
+# hmac proves that the message has not been altered in transit
+# hmac is also used to wrap a msg being sent 
+def mac_auth(ss_host, ss_receiver, host, receiver):
+    test_msg = "AUTH_CHECK" # msg to authenticate, optional
+
+    # creates new HMAC object 
+    tag = hmac.new(ss_host, test_msg.encode(), hashlib.sha256).digest()
+    
+    # Alice sends [Message + Tag(HMAC)] to Bob
+    # structure : Message | HMAC
+    host.send_classical(receiver.host_id, test_msg + "|" + tag.hex(), await_ack=True)
+    
+    # Bob gets the classical messages (one contains the hashed shared secret)
+    messages = receiver.get_classical(host.host_id, wait=5)
+
+    if not messages:
+        print("Error: No messages received for MAC auth")
+        return False
+    
+    auth_success = False
+    # Look for the msg that actually contains the seperator (which is message+tag)
+    for m in messages:
+        content = m.content
+        if "|" in content:
+            try:
+                msg_content, msg_tag = content.split("|")
+                # hash using bob's ss
+                expected_tag = hmac.new(ss_receiver, msg_content.encode(), hashlib.sha256).digest()
+                
+                if hmac.compare_digest(expected_tag, bytes.fromhex(msg_tag)):
+                    print("MAC Verification Successful!")
+                    auth_success = True
+                    break
+            except ValueError:
+                continue # Skip messages that don't fit the format
+   
+    return auth_success # boolean
 
 def pqc_handshake(host1, host2):
     # initiate PQC key exchange request/response
@@ -83,34 +149,44 @@ def pqc_handshake(host1, host2):
     pqc_keyexchange_rec(host2, host1.host_id)
 
     # 1) host2 sgenerates a public, private key pair and sends public key to host1
-    t_keygen_start = time.time()
+    #t_keygen_start = time.time()
     host2_kem = pqc_keygen(host2, host1.host_id) # gets host2's sk
-    t_keygen_end = time.time()
-    print("PQC Keygen Time (+ACK): ", t_keygen_end - t_keygen_start)
-
+ 
     # 2) host1 encapsulates and sends ciphertext -> host2 gets ciphertext
-    t_encap_start = time.time()
+    #t_encap_start = time.time()
     ss1 = pqc_encaps(host1, host2.host_id)
-    t_encap_end = time.time()
-    print("PQC Encapsulation Time(+ACK): ", t_encap_end - t_encap_start)
-
+  
     # 3) host2 decapsulates -> get shared secret
-    t_decap_start = time.time()
+    #t_decap_start = time.time()
     ss2 = pqc_decaps(host2, host1.host_id, host2_kem) # uses host2's kem object
-    t_decap_end = time.time()
-    print("PQC Decapsulation Time: ", t_decap_end - t_decap_start)
-
+    #t_decap_end = time.time()
     print("Alice SS:", ss1.hex())
     print("Bob   SS:", ss2.hex())
 
     if (ss1 == ss2):
         print("PQC Handshake Successful! Shared secrets match,")
         print("MATCH:", ss1 == ss2)
+        print("\n")
     else:
          print("Failure: Shared secrets do not match!")
 
-    return ss1 # In kyber, shared secret is designed to be session key bytes
-    # Reason : they're secure and can only be known by them
+    # to prove that the PQC handshake is successful and both sides actually have the same key
+    # its better than trading shared secret across the internet because thats risky!
+    auth_result = mac_auth(ss1,ss2,host1,host2)
+    print("Auth result = " ,auth_result)
+    print("\n")
+    if auth_result:
+        # Store the SESSION key (shared secret) inside the host objects for future use
+        # this is to use HMAC to wrap with a msg
+        # since qunetsim doesnt have the function to add session key, in python, we can add new attributes
+        # to an object even if they arent in original class
+        print("-- STORING SESSION KEY --")
+        host1.session_key = ss1
+        host2.session_key = ss2
+        print(f"Session key stored for {host1.host_id} <-> {host2.host_id}")
+        print("\n")
+        return True, ss1 # Return both the status and the key
+    return False, None
 
 def main():
     nodes = ["Alice", "Bob"]
@@ -127,11 +203,24 @@ def main():
     network.add_hosts([alice, bob])
 
     # start PQC handshake session after request
+    print("-- BEGINS PQC HANDSHAKE --")
     t0 = time.time()
-    session_key = pqc_handshake(alice, bob)
+    auth_result, session_key = pqc_handshake(alice, bob)
     t1 = time.time()
-    print("PQC Handshake Time: ", t1 - t0)
-    print("session key = ", session_key)
+    print("-- PQC LATENCY --")
+    for key in results.keys():
+        print(key + " : " + str(results.get(key)))
+    print("PQC Overall Handshake Time: ", t1 - t0)
+    print("\n")
+
+    if auth_result:
+        print("--- READY FOR QUANTUM OPERATIONS ---")
+        # Example: Using the key for a secure entanglement request
+        # send_secure_entanglement_request(alice, "Bob", session_key)
+    else:
+        print("Handshake failed. Aborting.")
+
+    network.draw_classical_network()
 
 if __name__ == '__main__':
     main()
