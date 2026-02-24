@@ -1,12 +1,13 @@
-# Design of a Secure and Deterministic Classical Control Plane for NV-Center Quantum Repeater Nodes
-The control plane coordinates entanglement generation, memory allocation, and local operations across NV-center repeater nodes using classical messaging and event-driven state machines. It  accounts for probabilistic entanglement success and classical communication delays while ensuring authenticated and deterministic execution of local quantum operations.
+# Design of a PQC-Secure Classical Control Plane for NV-Center Quantum Repeater Nodes
+The control plane coordinates entanglement generation, memory allocation, and local operations across NV-center repeater nodes using classical messaging and event-driven state machines. It accounts for probabilistic entanglement success and classical communication delays while ensuring authenticated and deterministic execution of local quantum operations.
 ## Problem
-Although physical mechanisms of entanglement generation and storage have been widely studied, the classical coordination required to operate these nodes reliably remains underdeveloped and security assumptions are often implicit. Without a well-designed control plane, coherence loss and attacks are possible
+Although physical mechanisms of entanglement generation and storage have been widely studied, the classical coordination required to operate these nodes reliably remains underdeveloped and security assumptions are often implicit. If a classical channel is insecure, the information about the node that is trying to be entangled with others will get leaked, thus a possible eavesdropper or MITM can intercept the traffic and decrypt the information later. Without a secure and well-designed control plane, coherence loss and attacks are possible.
 ## Goal
 Design a secure classical control plane that 
+- Uses PQC (KyberKEM) for handshake establishment process in classical channel
 - Coordinates entanglement generation & swapping
 - Preserves coherence of NV nuclear memories
-- Resists message forgery, replay and desynchronization attacks
+- Resists Store now, decrypt later and MITM attacks
 - Evaluate trade off between security overhead & quantum performance
 ## Methodology
 - Control plane architecture design
@@ -20,11 +21,11 @@ Design a secure classical control plane that
 	- Node level orchestration
 	- Secure classical messaging using PQC
 	- Timeout handling
-- Evaluation
-	- Control-plane latency
-	- Entanglement success probability under scheduling strategies
-	- Coherence-time consumption
-	- Impact of security overhead (authentication, handshake)
+- Evaluation (Is using PQC to secure classical information worth it?)
+	- PQC computational latency compared with non-PQC latency
+	- Network transmission overhead using huge PQC elements and not using it
+	- Impact of security overhead in entanglement generation and entanglement swapping
+	- Eavesdropping test between using PQC and non-PQC
 ## Software Used : QuNetSim
 Why QuNetSim?
 QuNetSim is a high-level quantum network simulator designed for developing and testing quantum networking applications and protocols at the network and application layers. It enables rapid prototyping of control and communication protocols without requiring detailed physical-layer modeling. This makes QuNetSim well-suited for this project, which focuses on the design of a post-quantum secure classical control plane and its performance evaluation.
@@ -50,4 +51,8 @@ pip install QuNetSim
 ```bash
 source .venv/bin/activate
 pip install QuNetSim
+```
+5. You can try running our python code to test it out
+```bash
+python3 ./src/PQC_handshake.py
 ```
