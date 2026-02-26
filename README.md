@@ -1,4 +1,4 @@
-# Design of a PQC-Secure Classical Control Plane for NV-Center Quantum Repeater Nodes
+# Design and Evaluation of a PQC-Secure Classical Control Plane for NV-Center Quantum Repeater Nodes
 The control plane coordinates entanglement generation, memory allocation, and local operations across NV-center repeater nodes using classical messaging and event-driven state machines. It accounts for probabilistic entanglement success and classical communication delays while ensuring authenticated and deterministic execution of local quantum operations.
 ## Problem
 Although physical mechanisms of entanglement generation and storage have been widely studied, the classical coordination required to operate these nodes reliably remains underdeveloped and security assumptions are often implicit. If a classical channel is insecure, the information about the node that is trying to be entangled with others will get leaked, thus a possible eavesdropper or MITM can intercept the traffic and decrypt the information later. Without a secure and well-designed control plane, coherence loss and attacks are possible.
@@ -50,7 +50,7 @@ pip install QuNetSim
 4. Once you log out and log back in, you have to reactivate a virtual environment and reinstall qunetsim
 ```bash
 source .venv/bin/activate
-pip install QuNetSim
+pip install qunetsim
 ```
 5. You can try running our python code to test it out
 ```bash
