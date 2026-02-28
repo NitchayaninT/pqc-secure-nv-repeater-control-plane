@@ -10,7 +10,7 @@ Design a secure classical control plane that
 - Resists Store now, decrypt later and MITM attacks
 - Evaluate trade off between security overhead & quantum performance
 ## Methodology
-- Control plane architecture design
+- [Control plane architecture design](./Control%20Plane%20Design/README.md)
 	- Layered control-plane stack
 	- Deterministic scheduling policies
 - NV-center behavior abstraction model

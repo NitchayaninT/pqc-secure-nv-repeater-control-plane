@@ -1,4 +1,6 @@
 # Control Plane Design
+
+![Control Plane Architecture](Control%20Plane%20Architecture.png)
 Service : Entanglement Service 
 	- Entanglement Generation
 	- Entanglement Swapping
