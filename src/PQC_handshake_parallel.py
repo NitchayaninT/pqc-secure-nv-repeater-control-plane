@@ -1,17 +1,34 @@
-# Testing PQC integration with QuNetSim
-# Insert a handshake step before allowing an entanglement request
-# THIS one uses a Unicast handshake approach, where each node does a separate handshake with every other node to establish pairwise shared keys
-from qunetsim.components import Host, Network
-from qunetsim.objects import Message, Qubit, Logger
+# Path-based Parallel Handshake Establishment for Long-Distance Entanglement
+# This example : 5 nodes
+# 1. Entanglement request for Repeater A, E
+# 2. Compute shortest path for A and E
+# 3. Parallel PQC Handshake along the path (A-B-C-D-E)
+    # Repeater A sends its pk to B, B replicates A's pk and send to C, C sends A'spk to D, D sends A's pk to E (in parallel)
+# 4. Repeater A then waits for ciphertexts from all nodes
+# 5. Authentication with all nodes along the path
+# This is important before all nodes in the shortest path can be trusted before doing entanglement swapping 
+
+from qunetsim.components import Host
+from qunetsim.components import Network
+from qunetsim.objects import Logger
+from qunetsim.objects import Message
+from qunetsim.objects import Qubit
 from qunetsim.backends import EQSNBackend
 import time
 import networkx
 import oqs
 import hashlib
-import hmac
+import hmac 
+import threading
 
 kem_name = "ML-KEM-768" # for kyber 768
 sign_algo = "ML-DSA-44" 
+
+network = Network.get_instance()
+backend = EQSNBackend()
+results = {} 
+handshake_state = {}  
+# structure: handshake_state["Alice"]["Bob"] = {"kem": ..., "ss_enc": ..., "ss_dec": ...}
 
 # payload list
 PQC_SYN = "PQC_SYN"
@@ -21,13 +38,26 @@ PQC_SEND_PK = "PQC_SEND_PK"
 PQC_SEND_CT = "PQC_SEND_CT"
 PQC_DONE = "PQC_DONE"
 
-network = Network.get_instance()
-backend = EQSNBackend()
-results = {} # to keep results of each process' latency
-handshake_state = {}  
+
+def handshake_with_node(alice, node_id, bucket):
+    bucket[node_id] = {}
+    bucket[node_id]["kem"], bucket[node_id]["pk_hex"] = pqc_keygen(alice, node_id)
+
+    peer = network.get_host(node_id)
+    bucket[node_id]["ss_enc"] = pqc_encaps(peer, alice.host_id)
+
+    bucket[node_id]["ss_dec"] = pqc_decaps(alice, node_id, bucket[node_id]["kem"], bucket[node_id]["pk_hex"])
+
+    send_finished(alice, node_id, bucket[node_id]["ss_dec"])
+    auth_ok = verify_finished(peer, alice.host_id, bucket[node_id]["ss_enc"])
+    bucket[node_id]["auth_ok"] = auth_ok
+
+    print("-- AUTHENTICATION RESULT --")
+    print(bucket[node_id]["auth_ok"])
 
 def routing_algorithm(di_graph, source, dest):
     """
+    Chosen algorithm : Dijkstra's
     Entanglement based routing function. Note: any custom routing function must
     have exactly these three parameters and must return a list ordered by the steps
     in the route.
@@ -39,7 +69,7 @@ def routing_algorithm(di_graph, source, dest):
     Returns:
         (list): The route ordered by the steps in the route.
     """
-
+    # -- WILL EDIT THIS --
     # Build a graph with the vertices, hosts, edges, connections
     entanglement_network = networkx.DiGraph()
     nodes = di_graph.nodes() # nodes within the graph representation
@@ -109,28 +139,11 @@ cathy_pk, cathy_sk = generate_long_term_sig_keys()
 dave_pk, dave_sk = generate_long_term_sig_keys()
 eva_pk, eva_sk = generate_long_term_sig_keys()
 
-# after handshake, Alice can send a message to Bob with HMAC 
-def send_finished(host, receiver_id, ss):
-    ss_hashed = hashlib.sha256(b"VERIFY_SS" + ss).digest()
-    finished = hmac.new(ss_hashed, b"VERIFY_SS", hashlib.sha256).digest()
-    host.send_classical(receiver_id, "FIN|" + finished.hex(), await_ack=True)
-
-# then Bob can verify whether the shared secret is the same by comparing the received HMAC with the expected HMAC using the shared secret he has
-def verify_finished(host, peer_id, ss) -> bool:
-    msg = host.get_classical(peer_id, wait=5)[0].content
-    if not msg.startswith("FIN|"):
-        return False
-    recv = bytes.fromhex(msg.split("|")[1])
-
-    ss_hashed = hashlib.sha256(b"VERIFY_SS"+ss).digest()
-    expected = hmac.new(ss_hashed, b"VERIFY_SS", hashlib.sha256).digest()
-    return hmac.compare_digest(recv, expected)
-
 def pqc_keyexchange_req(host, receiver_id, payload=PQC_SYN):
     # Request PQC key exchange
     print(host.host_id, " PQC_SYN -> ", receiver_id)
     # wait forever until ack received
-    host.send_classical(receiver_id, payload, await_ack=True)
+    host.send_classical(receiver_id, payload)
     return None
 
 def pqc_keyexchange_rec(host, sender_id):
@@ -152,29 +165,34 @@ def pqc_keygen(host, receiver_id):
     # Time taken of key generation process (computational latency)
     #results['keygen_cpu'] = time.perf_counter() - start
 
-    # Bob sends PK to Alice
-    alice_received_pk_start = time.perf_counter()
+    # Alice sends her public key to Bob, and Bob receives it
     print(host.host_id, PQC_SEND_PK, " -> ", receiver_id)
+    bob_received_pk_start = time.perf_counter()
     host.send_classical(receiver_id, pk.hex()) # in qunetsim, they can only carry string msgs
-
+    
     # time taken of Pk transmission
-    result_name = 'pk_transmission ' + host.host_id + '<->' + receiver_id
-    results[result_name] = time.perf_counter() - alice_received_pk_start
+    results_name = 'pk_transmission ' + host.host_id + '<->' + receiver_id
+    results[results_name] = time.perf_counter() - bob_received_pk_start
     print("PQC_SEND_PK_ACK received")
     return kem_receiver, pk.hex()
 
 # PQC encapsulation
 def pqc_encaps(host, receiver_id):
     pk_msg = host.get_classical(receiver_id, wait=5)[0].content
+    if(host.host_id == "Eva"):
+        while(pk_msg.startswith("PQC_SYN")):
+            print("Alice's pk hasnt arrived to Eva yet. Waiting for pk...")
+            pk_msg = host.get_classical(receiver_id, wait=5)[0].content
+    # pk hasnt arrived yet for Eva
     pk_bytes = bytes.fromhex(pk_msg) # because we sent hex string
     print("Byte count = ",len(pk_bytes))
 
-    start = time.perf_counter() # start encaps
+    #start = time.perf_counter() # start encaps
     with oqs.KeyEncapsulation(kem_name) as kem:
         ct, ss_enc = kem.encap_secret(pk_bytes) # only accept a byte type object
         
         # calculate encaps computation time
-       # results['encap_cpu'] = time.perf_counter() - start
+        #results['encap_cpu'] = time.perf_counter() - start
         
         # get bob's signed pk, sk is in global
         # Signs handshake transcript (all previous messages) with the private signature key
@@ -214,14 +232,17 @@ def pqc_encaps(host, receiver_id):
         print("PQC_CT_ACK received")
     return ss_enc # alice gets their shared secret from bob's pk
 
-# PQC decapsulation 
+# PQC decapsulation
+# alice has to receive Ct from all nodes
 def pqc_decaps(host, receiver_id, kem_host, pk_hex):
     ct_msg = host.get_classical(receiver_id, wait=5)[0].content 
     ct_hex, sig_hex, receiver_pk_hex = ct_msg.split("|")
     ct_bytes = bytes.fromhex(ct_hex)
     sig = bytes.fromhex(sig_hex) # get signature
     receiver_pk_bytes = bytes.fromhex(receiver_pk_hex) # uses the receiver's signature public key to verify signature
-    print("Byte count = ",len(ct_bytes))
+    print("Byte count ct = ",len(ct_bytes))
+    print("Byte count sig = ",len(sig))
+    print("Byte count receiver_pk = ",len(receiver_pk_bytes))
 
     # Verify the signature using the receiver's public key to authenticate that the message is indeed from the expected sender and has not been tampered with
     transcript = bytes.fromhex(pk_hex) + ct_bytes # record of the messages being sent
@@ -240,15 +261,36 @@ def pqc_decaps(host, receiver_id, kem_host, pk_hex):
         ss_dec = kem_host.decap_secret(ct_bytes)
 
         # calculates decap computation time
-        #results['decap_cpu'] = time.perf_counter() - start
+        results['decap_cpu'] = time.perf_counter() - start
         print(PQC_DONE)
     return ss_dec
 
+# after handshake, Alice can send a message to Bob with HMAC 
+def send_finished(host, receiver_id, ss):
+    ss_hashed = hashlib.sha256(b"VERIFY_SS" + ss).digest()
+    finished = hmac.new(ss_hashed, b"VERIFY_SS", hashlib.sha256).digest()
+    host.send_classical(receiver_id, "FIN|" + finished.hex(),await_ack=True)
+
+# then Bob can verify whether the shared secret is the same by comparing the received HMAC with the expected HMAC using the shared secret he has
+def verify_finished(host, peer_id, ss) -> bool:
+    msg = host.get_classical(peer_id, wait=5)[0].content
+    if not msg.startswith("FIN|"):
+        print("Unexpected message format. Expected FIN message.")
+        return False
+    recv = bytes.fromhex(msg.split("|")[1])
+
+    print("Byte count HMAC+FIN = ",len(recv))
+    ss_hashed = hashlib.sha256(b"VERIFY_SS"+ss).digest()
+    expected = hmac.new(ss_hashed, b"VERIFY_SS", hashlib.sha256).digest()
+    return hmac.compare_digest(recv, expected)
+
+# This is different from 2 node version, but first, it checks if the node is adjacent
 def pqc_handshake(host1, host2):
-    # initiate PQC key exchange request/response
     pqc_keyexchange_req(host1, host2.host_id) 
     pqc_keyexchange_rec(host2, host1.host_id)
 
+    bucket = hs_bucket(host1.host_id) # bucket for alice to store the kem objects and shared secrets for each node in the path
+    
     host1.get_connections() 
     connections = host1.get_connections()
     adjacent = False
@@ -256,34 +298,22 @@ def pqc_handshake(host1, host2):
         if c['connection'] == host2.host_id:
             adjacent = True
             break
-    
+
     if not adjacent:
         print("Hosts are not adjacent. Please establish handshake in middle node first before doing PQC handshake.")
-        route = network.get_quantum_route(host1.host_id, host2.host_id)
+        route = network.get_quantum_route(host1.host_id, host2.host_id) # get shortest path
         print("Route for handshake: ", route)
         
-        node_count = len(route) 
-   
-        for i in range(node_count-1):
-            next_node = route[i+1]
-            print("Starting handshake between ", route[i], " and ", next_node)
-            
-            current_node = network.get_host(route[i])
-            peer = network.get_host(next_node)
-            
-            kem_auth, pk_sender = pqc_keygen(current_node, next_node)
-            ss_enc = pqc_encaps(peer, current_node.host_id) # peer encapsulates to current node
-            ss_dec = pqc_decaps(current_node, peer.host_id, kem_auth, pk_sender) 
-            
-            send_finished(current_node, next_node, ss_dec) 
-            auth_ok = verify_finished(peer, route[i], ss_enc) 
-            
-            if not auth_ok:
-                print("Authentication failed with ", next_node)
-                return False, None
-            print("Authentication successful with ", next_node)
+        # do handshake between alice and every node PARALLELLY
+        threads=[]
+        for node_id in route[1:]:
+            print("Starting handshake thread for node: ", node_id)
+            t = threading.Thread(target=handshake_with_node, args=(host1, node_id, bucket))
+            t.start()
+            threads.append(t)
 
-    return True, None
+    for t in threads: t.join()
+    return True, None # indicate successful handshake
 
 def main():
     nodes = ["Alice", "Bob", "Cathy", "Dave", "Eva"]
@@ -316,16 +346,15 @@ def main():
     # start PQC handshake session after request
     # for multinode, try doing handshake for every single link since we want to see how long it takes for all nodes to finish the handshake
     print("-- BEGINS PQC HANDSHAKE FOR EVERY NODE--")
-    t0 = time.perf_counter()
-    auth_result_ae, session_key_ae = pqc_handshake(alice, eva) # 4 hops, alice - eva
+    #t0 = time.perf_counter()
+    auth_result_ae, session_key_ae = pqc_handshake(alice, eva) # 4 hops, alice - eva. but need to do handshake for the middle nodes as well, by sending alice's pk to everyone
    
-    t1 = time.perf_counter()
+    #t1 = time.perf_counter()
     print("-- PQC LATENCY --")
     for key in results.keys():
         print(key + " : " + str(results.get(key)))
-    print("PQC Overall Handshake Time: ", t1 - t0)
+    #print("PQC Overall Handshake Time: ", t1 - t0)
     print("\n")
-
     if auth_result_ae:
         print("--- READY FOR QUANTUM OPERATIONS ---")
         # Example: Using the key for a secure entanglement request
@@ -333,14 +362,15 @@ def main():
     else:
         print("Handshake failed. Aborting.")
 
-    sum_pk = results['pk_transmission Alice<->Bob'] + results['pk_transmission Bob<->Cathy'] + results['pk_transmission Cathy<->Dave'] + results['pk_transmission Dave<->Eva']
+    sum_pk = results['pk_transmission Alice<->Bob'] + results['pk_transmission Alice<->Cathy'] + results['pk_transmission Alice<->Dave'] + results['pk_transmission Alice<->Eva']
     avg_pk = sum_pk/4
 
-    sum_ct = results['ct_transmission Bob<->Alice'] + results['ct_transmission Cathy<->Bob'] + results['ct_transmission Dave<->Cathy'] + results['ct_transmission Eva<->Dave']
+    sum_ct = results['ct_transmission Bob<->Alice'] + results['ct_transmission Cathy<->Alice'] + results['ct_transmission Dave<->Alice'] + results['ct_transmission Eva<->Alice']
     avg_ct = sum_ct/4
 
     print("Average pk transmission time: ", avg_pk)
     print("Average ct transmission time: ", avg_ct)
+
     network.draw_classical_network()
 
 if __name__ == '__main__':

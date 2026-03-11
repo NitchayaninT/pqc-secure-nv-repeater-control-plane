@@ -53,9 +53,9 @@ def pqc_keygen(host, receiver_id):
     start = time.perf_counter()
 
     # Bob sends PK to Alice
-    alice_received_pk_start = time.perf_counter()
     print(host.host_id, PQC_SEND_PK, " -> ", receiver_id)
-    host.send_classical(receiver_id, "B", await_ack=True) # in qunetsim, they can only carry string msgs
+    alice_received_pk_start = time.perf_counter()
+    host.send_classical(receiver_id, "B") # in qunetsim, they can only carry string msgs
     # time taken of Pk transmission
     results['pk_transmission'] = time.perf_counter() - alice_received_pk_start
     print("1 byte received")
@@ -69,7 +69,7 @@ def pqc_encaps(host, receiver_id):
 
     start = time.perf_counter() # start encaps
     bob_received_ct_start = time.perf_counter()
-    host.send_classical(receiver_id,"A", await_ack=True) # sends ciphertext
+    host.send_classical(receiver_id,"A") # sends ciphertext
     results['ct_transmission'] = time.perf_counter() - bob_received_ct_start
     print("1 byte received")
     return None
@@ -88,15 +88,15 @@ def pqc_handshake(host1, host2):
 
     # 1) host2 sgenerates a public, private key pair and sends public key to host1
     #t_keygen_start = time.time()
-    pqc_keygen(host2, host1.host_id) # gets host2's sk
+    pqc_keygen(host1, host2.host_id) # gets host2's sk
  
     # 2) host1 encapsulates and sends ciphertext -> host2 gets ciphertext
     #t_encap_start = time.time()
-    pqc_encaps(host1, host2.host_id)
+    pqc_encaps(host2, host1.host_id)
   
     # 3) host2 decapsulates -> get shared secret
     #t_decap_start = time.time()
-    pqc_decaps(host2, host1.host_id, None) # uses host2's kem object
+    pqc_decaps(host1, host2.host_id, None) # uses host2's kem object
     #t_decap_end = time.time()
 
     return None

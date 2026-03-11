@@ -1,5 +1,6 @@
 # Testing PQC integration with QuNetSim
 # Insert a handshake step before allowing an entanglement request
+# THIS one uses a Unicast handshake approach, where each node does a separate handshake with every other node to establish pairwise shared keys
 from qunetsim.components import Host, Network
 from qunetsim.objects import Message, Qubit, Logger
 from qunetsim.backends import EQSNBackend

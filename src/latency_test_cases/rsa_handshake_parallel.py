@@ -3,6 +3,8 @@
 Process : Sender generates a random secret key, encrypts it with receiver's RSA pk
 and sends the ciphertext. The receiver decrypts it using their private key
 '''
+import threading
+
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from qunetsim.components import Host, Network
@@ -28,6 +30,23 @@ network = Network.get_instance()
 backend = EQSNBackend()
 results = {} # to keep results of each process' latency
 handshake_state = {}  
+
+def handshake_with_node(alice, node_id, bucket):
+    bucket[node_id] = {}
+    bucket[node_id]["pk_hex"] = rsa_keygen(alice, node_id)
+
+    peer = network.get_host(node_id)
+    bucket[node_id]["ss_enc"] = rsa_encryption(peer, alice.host_id)
+
+    bucket[node_id]["ss_dec"] = rsa_decryption(alice, node_id, bucket[node_id]["pk_hex"])
+
+    send_finished(alice, node_id, bucket[node_id]["ss_dec"])
+    auth_ok = verify_finished(peer, alice.host_id, bucket[node_id]["ss_enc"])
+    bucket[node_id]["auth_ok"] = auth_ok
+
+    print("-- AUTHENTICATION RESULT --")
+    print(bucket[node_id]["auth_ok"])
+
 
 def routing_algorithm(di_graph, source, dest):
     """
@@ -159,7 +178,14 @@ def rsa_keygen(host, receiver_id):
     #results['keygen_cpu'] = time.perf_counter() - start
 
     # store private key
-    host.private_key = private_key
+    if(receiver_id == "Bob"):
+        host.private_key_bob = private_key
+    elif(receiver_id == "Cathy"):
+        host.private_key_cathy = private_key
+    elif(receiver_id == "Dave"):
+        host.private_key_dave = private_key
+    elif(receiver_id == "Eva"):
+        host.private_key_eva = private_key
     
     # Send public key to another host so they can start encrypting
     pk_bytes = public_key.public_bytes(
@@ -178,6 +204,10 @@ def rsa_keygen(host, receiver_id):
 # encrypts a random secret key with receiver's pk
 def rsa_encryption(host, receiver_id):
     public_key = host.get_classical(receiver_id, wait=5)[0].content
+    if(host.host_id == "Eva"):
+        while(public_key.startswith("RSA_SYN")):
+            print("Alice's pk hasnt arrived to Eva yet. Waiting for pk...")
+            public_key = host.get_classical(receiver_id, wait=5)[0].content
     pk_bytes = bytes.fromhex(public_key) 
     public_key = serialization.load_der_public_key(pk_bytes)
     #print("Pk byte count : ",pk_bytes)
@@ -256,7 +286,14 @@ def rsa_decryption(host, receiver_id, pk):
             return None 
         
     # get host's private key
-    private_key = host.private_key
+    if(receiver_id == "Bob"):
+        private_key = host.private_key_bob 
+    elif(receiver_id == "Cathy"):
+        private_key = host.private_key_cathy
+    elif(receiver_id == "Dave"):
+        private_key = host.private_key_dave
+    elif(receiver_id == "Eva"):
+        private_key = host.private_key_eva
     
     # Once we have an encrypted message, it can be decrypted using private key
     #start = time.perf_counter()
@@ -276,6 +313,7 @@ def rsa_handshake(host1, host2):
     rsa_keyexchange_req(host1, host2.host_id) 
     rsa_keyexchange_rec(host2, host1.host_id)
 
+    bucket = hs_bucket(host1.host_id)
     host1.get_connections() 
     connections = host1.get_connections()
     adjacent = False
@@ -289,32 +327,15 @@ def rsa_handshake(host1, host2):
         route = network.get_quantum_route(host1.host_id, host2.host_id)
         print("Route for handshake: ", route)  
 
-        node_count = len(route)
+        threads = []
+        for node_id in route[1:]:
+            print("Starting handshake thread for node: ", node_id)
+            t = threading.Thread(target=handshake_with_node, args=(host1, node_id, bucket))
+            threads.append(t)
+            t.start()
 
-        for i in range(node_count-1):
-            next_node = route[i+1]
-            print("Starting handshake between ", route[i], " and ", next_node)
-            current_node = network.get_host(route[i])
-            peer = network.get_host(next_node)
-        
-            # 2. keygen
-            pk_sender = rsa_keygen(current_node, next_node)
-
-            # 3. encrypt
-            ss1 = rsa_encryption(peer, current_node.host_id)
-
-            # 4. decrypt
-            ss2 = rsa_decryption(current_node, peer.host_id, pk_sender)
-            
-
-            # 5. Authentication
-            send_finished(current_node, next_node, ss2)
-            auth_ok = verify_finished(peer, current_node.host_id, ss1)
-            
-            if not auth_ok:
-                print("Authentication failed with ", next_node)
-                return False, None
-            print("Authentication successful with ", next_node)
+        for t in threads:
+            t.join()
 
         return True, None
 
@@ -351,7 +372,7 @@ def main():
     print("-- BEGINS RSA HANDSHAKE --")
     start = time.perf_counter()
     auth_result_ae, session_key_ae = rsa_handshake(alice, eva)
-    results['rsa total handshake time'] = time.perf_counter() - start
+    #results['rsa total handshake time'] = time.perf_counter() - start
     print("-- RSA LATENCY --")
     for key in results.keys():
         print(key + " : " + str(results.get(key)))
@@ -364,10 +385,10 @@ def main():
     else:
         print("Handshake failed. Aborting.")
 
-    sum_pk = results['pk_transmission Alice<->Bob'] + results['pk_transmission Bob<->Cathy'] + results['pk_transmission Cathy<->Dave'] + results['pk_transmission Dave<->Eva']
+    sum_pk = results['pk_transmission Alice<->Bob'] + results['pk_transmission Alice<->Cathy'] + results['pk_transmission Alice<->Dave'] + results['pk_transmission Alice<->Eva']
     avg_pk = sum_pk/4
 
-    sum_ct = results['ct_transmission Bob<->Alice'] + results['ct_transmission Cathy<->Bob'] + results['ct_transmission Dave<->Cathy'] + results['ct_transmission Eva<->Dave']
+    sum_ct = results['ct_transmission Bob<->Alice'] + results['ct_transmission Cathy<->Alice'] + results['ct_transmission Dave<->Alice'] + results['ct_transmission Eva<->Alice']
     avg_ct = sum_ct/4
 
     print("Average pk transmission time: ", avg_pk)
